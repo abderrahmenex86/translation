@@ -1,3 +1,4 @@
+import argparse
 import json
 import random
 
@@ -33,8 +34,8 @@ def get_model(model_type, src_vocab_size, tgt_vocab_size, pad_idx, device):
 
     embed_size = 256
     hidden_size = 512
-    num_layers = 2
-    dropout = 0.5
+    num_layers = 1
+    dropout = 0.7
 
     if model_type == "rnn":
         encoder = EncoderRNN(src_vocab_size, embed_size, hidden_size, num_layers, dropout)
@@ -63,17 +64,27 @@ def get_model(model_type, src_vocab_size, tgt_vocab_size, pad_idx, device):
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Machine Translation Comparative Study Training")
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="all",
+        choices=["all", "rnn", "lstm", "gru", "transformer"],
+        help="Specify the model to train. Defaults to 'all' to run the full comparative study sequentially.",
+    )
+    args = parser.parse_args()
+
     random.seed(1337)
     np.random.seed(1337)
     torch.manual_seed(1337)
     torch.cuda.manual_seed_all(1337)
     torch.backends.cudnn.benchmark = True
 
-    MODEL_TYPE = "lstm"
-    n_epochs = 30
-    batch_size = 128
+    n_epochs = 50
+    batch_size = 256
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    print("-> Loading datasets")
     raw_src_train = read_text_file("dataset/multi30k/train.en")
     raw_tgt_train = read_text_file("dataset/multi30k/train.fr")
 
@@ -82,11 +93,12 @@ if __name__ == "__main__":
 
     raw_src_train, raw_tgt_train = filter_pairs(raw_src_train, raw_tgt_train, max_len=50)
     raw_src_val, raw_tgt_val = filter_pairs(raw_src_val, raw_tgt_val, max_len=50)
+    print("-> Datasets loaded and filterd.")
 
     src_tokenizer = BasicTokenizer(min_freq=2)
     tgt_tokenizer = BasicTokenizer(min_freq=2)
 
-    print("Fitting tokenizers.")
+    print("-> Fitting tokenizers")
     src_tokenizer.fit(raw_src_train)
     tgt_tokenizer.fit(raw_tgt_train)
 
@@ -118,23 +130,47 @@ if __name__ == "__main__":
         prefetch_factor=2,
     )
 
-    model = get_model(
-        MODEL_TYPE,
-        src_vocab_size=len(src_tokenizer),
-        tgt_vocab_size=len(tgt_tokenizer),
-        pad_idx=tgt_tokenizer.PAD,
-        device=device,
-    )
+    if args.model == "all":
+        models_to_train = ["rnn", "lstm", "gru", "transformer"]
+    else:
+        models_to_train = [args.model]
 
-    criterion = nn.CrossEntropyLoss(ignore_index=tgt_tokenizer.PAD)
+    for current_model in models_to_train:
+        print("\n" + "=" * 50)
+        print(f" Initializing and Training: {current_model.upper()}")
+        print("=" * 50)
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=3)
+        model = get_model(
+            current_model,
+            src_vocab_size=len(src_tokenizer),
+            tgt_vocab_size=len(tgt_tokenizer),
+            pad_idx=tgt_tokenizer.PAD,
+            device=device,
+        )
 
-    print(f"Training {MODEL_TYPE.upper()}")
-    history = train(
-        model, train_loader, val_loader, criterion, optimizer, scheduler, device, n_epochs, MODEL_TYPE, tgt_tokenizer
-    )
+        criterion = nn.CrossEntropyLoss(ignore_index=tgt_tokenizer.PAD, label_smoothing=0.1)
 
-    with open(f"{MODEL_TYPE}_history.json", "w") as f:
-        json.dump(history, f)
+        if current_model == "transformer":
+            optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-2)
+        else:
+            optimizer = torch.optim.AdamW(model.parameters(), lr=5e-3, weight_decay=1e-2)
+
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=3)
+
+        history = train(
+            model,
+            train_loader,
+            val_loader,
+            criterion,
+            optimizer,
+            scheduler,
+            device,
+            n_epochs,
+            current_model,
+            tgt_tokenizer,
+        )
+
+        with open(f"{current_model}_history.json", "w") as f:
+            json.dump(history, f)
+
+        print(f"-> Finished training {current_model.upper()}. History saved to {current_model}_history.json\n")
