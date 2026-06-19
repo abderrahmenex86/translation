@@ -1,7 +1,6 @@
+import json
 import re
 from collections import Counter
-
-import torch
 
 
 class BasicTokenizer:
@@ -21,7 +20,7 @@ class BasicTokenizer:
         s = re.sub(r"[^a-zA-ZÀ-ÿ.!?]+", r" ", s)
         return s
 
-    def fit(self, sentences):
+    def fit(self, sentences, max_vocab=15000):
         counter = Counter()
         for sentence in sentences:
             words = self.normalize(sentence).split()
@@ -29,8 +28,10 @@ class BasicTokenizer:
 
         self.word2idx = {"<PAD>": self.PAD, "<SOS>": self.SOS, "<EOS>": self.EOS, "<UNK>": self.UNK}
 
+        most_common_words = counter.most_common(max_vocab - 4)
+
         idx = 4
-        for word, count in counter.items():
+        for word, count in most_common_words:
             if count >= self.min_freq:
                 self.word2idx[word] = idx
                 idx += 1
@@ -48,3 +49,12 @@ class BasicTokenizer:
 
     def __len__(self):
         return len(self.word2idx)
+
+    def save_vocab(self, filepath):
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(self.word2idx, f, ensure_ascii=False, indent=4)
+
+    def load_vocab(self, filepath):
+        with open(filepath, "r", encoding="utf-8") as f:
+            self.word2idx = json.load(f)
+        self.idx2word = {int(v): k for k, v in self.word2idx.items()}
