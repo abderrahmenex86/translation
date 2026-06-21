@@ -16,7 +16,7 @@ def get_tokenizers():
     src_tok = BasicTokenizer(min_freq=2)
     tgt_tok = BasicTokenizer(min_freq=2)
 
-    if os.path.exists("src_vocab.json") and os.path.exists("tgt_vocab.json"):
+    if os.path.exists("../models/src_vocab.json") and os.path.exists("../models/tgt_vocab.json"):
         print("[INFO] Loading tokenizers from JSON...")
         src_tok.load_vocab("src_vocab.json")
         tgt_tok.load_vocab("tgt_vocab.json")
@@ -39,7 +39,7 @@ def main():
 
     model = get_model(args.model, len(src_tokenizer), len(tgt_tokenizer), tgt_tokenizer.PAD, device)
 
-    weights_path = f"best_model_{args.model}.pth"
+    weights_path = f"../models/best_model_{args.model}.pth"
     if not os.path.exists(weights_path):
         print(f"[ERROR] Could not find '{weights_path}'.")
         return
