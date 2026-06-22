@@ -1,19 +1,21 @@
 import os
 import sys
 
+import torch
 from torch.utils.data import DataLoader
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, BASE_DIR)
 
-from src.data_utils import TranslationDataset, collate_fn, filter_pairs, read_text_file
+from src.data_utils import PadCollate, TranslationDataset, filter_pairs, read_text_file
 from src.tokenizer import BasicTokenizer
 
 
 def main():
     print("[INFO] Verifying DataLoader and Alignments...")
 
-    raw_src = read_text_file("dataset/tatoeba/train.en")[:1000]
-    raw_tgt = read_text_file("dataset/tatoeba/train.fr")[:1000]
+    raw_src = read_text_file(os.path.join(BASE_DIR, "dataset/tatoeba/train.en"))[:1000]
+    raw_tgt = read_text_file(os.path.join(BASE_DIR, "dataset/tatoeba/train.fr"))[:1000]
     raw_src, raw_tgt = filter_pairs(raw_src, raw_tgt, max_len=50)
 
     src_tok = BasicTokenizer(min_freq=2)
@@ -22,6 +24,8 @@ def main():
     tgt_tok.fit(raw_tgt)
 
     dataset = TranslationDataset(raw_src, raw_tgt, src_tok, tgt_tok)
+    collate_fn = PadCollate(pad_idx=tgt_tok.PAD)
+
     loader = DataLoader(dataset, batch_size=4, shuffle=True, collate_fn=collate_fn)
     src_batch, tgt_batch = next(iter(loader))
 

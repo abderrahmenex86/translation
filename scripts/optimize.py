@@ -9,9 +9,10 @@ import torch.nn as nn
 from optuna.integration.mlflow import MLflowCallback
 from torch.utils.data import DataLoader
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, BASE_DIR)
 
-from src.data_utils import TranslationDataset, collate_fn, filter_pairs, read_text_file
+from src.data_utils import PadCollate, TranslationDataset, filter_pairs, read_text_file
 from src.models.factory import get_model
 from src.tokenizer import BasicTokenizer
 from src.trainer import evaluate, train_epoch
@@ -59,7 +60,6 @@ class OptimizationObjective:
         criterion = nn.CrossEntropyLoss(ignore_index=self.tgt_tok.PAD, label_smoothing=0.1)
         optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
 
-        # Train for 5 epochs to gauge architectural convergence
         for epoch in range(5):
             train_epoch(model, self.train_loader, criterion, optimizer, self.device, self.model_type)
             val_metrics = evaluate(model, self.val_loader, criterion, self.device, self.model_type, self.tgt_tok)
@@ -82,8 +82,8 @@ def main():
     print(f"[INFO] Initializing optimization for {args.model.upper()} on {device.type.upper()}")
 
     print("[INFO] Loading data subset for optimization...")
-    raw_src = read_text_file("dataset/multi30k/train.en")[:10000]
-    raw_tgt = read_text_file("dataset/multi30k/train.fr")[:10000]
+    raw_src = read_text_file(os.path.join(BASE_DIR, "dataset/multi30k/train.en"))[:10000]
+    raw_tgt = read_text_file(os.path.join(BASE_DIR, "dataset/multi30k/train.fr"))[:10000]
     raw_src, raw_tgt = filter_pairs(raw_src, raw_tgt, max_len=50)
 
     src_tok = BasicTokenizer(min_freq=2)
@@ -96,6 +96,8 @@ def main():
     train_size = int(0.8 * len(dataset))
     val_size = len(dataset) - train_size
     train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
+
+    collate_fn = PadCollate(pad_idx=tgt_tok.PAD)
 
     train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True, collate_fn=collate_fn, num_workers=2)
     val_loader = DataLoader(val_dataset, batch_size=128, shuffle=False, collate_fn=collate_fn, num_workers=2)
