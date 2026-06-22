@@ -49,16 +49,20 @@ def load_data_lines(dataset_dir, max_len=50):
 
 def build_dataloaders(args, train_data, val_data, src_tok, tgt_tok):
     collate_fn = PadCollate(pad_idx=tgt_tok.PAD)
+    use_cuda = torch.cuda.is_available()
+
+    num_workers = 16 if use_cuda else 0
+    prefetch_factor = 4 if num_workers > 0 else None
 
     train_loader = DataLoader(
         TranslationDataset(*train_data, src_tok, tgt_tok),
         batch_size=args.batch_size,
         shuffle=True,
         collate_fn=collate_fn,
-        num_workers=4,
-        pin_memory=True,
-        persistent_workers=True,
-        prefetch_factor=2,
+        num_workers=num_workers,
+        pin_memory=use_cuda,
+        persistent_workers=(num_workers > 0),
+        prefetch_factor=prefetch_factor,
     )
 
     val_loader = DataLoader(
@@ -66,9 +70,9 @@ def build_dataloaders(args, train_data, val_data, src_tok, tgt_tok):
         batch_size=args.batch_size,
         shuffle=False,
         collate_fn=collate_fn,
-        num_workers=2,
-        pin_memory=True,
-        persistent_workers=True,
-        prefetch_factor=4,
+        num_workers=min(4, num_workers),
+        pin_memory=use_cuda,
+        persistent_workers=(num_workers > 0),
+        prefetch_factor=prefetch_factor,
     )
     return train_loader, val_loader
