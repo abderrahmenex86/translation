@@ -2,14 +2,13 @@ import math
 
 import torch
 from torchmetrics.text import BLEUScore
-from tqdm.auto import tqdm
 
 
 def train_epoch(model, loader, criterion, optimizer, device, model_type):
     model.train()
     total_loss, total_samples = 0.0, 0
 
-    for src, tgt in tqdm(loader, desc="Training", leave=False, unit="batch", disable=True):
+    for src, tgt in loader:
         src, tgt = src.to(device, non_blocking=True), tgt.to(device, non_blocking=True)
         optimizer.zero_grad()
 
@@ -43,7 +42,7 @@ def evaluate(model, loader, criterion, device, model_type, tgt_tokenizer):
     all_preds, all_refs = [], []
 
     with torch.no_grad():
-        for src, tgt in tqdm(loader, desc="Evaluating", leave=False, unit="batch", disable=True):
+        for src, tgt in loader:
             src, tgt = src.to(device, non_blocking=True), tgt.to(device, non_blocking=True)
 
             if model_type == "transformer":
@@ -53,13 +52,17 @@ def evaluate(model, loader, criterion, device, model_type, tgt_tokenizer):
                 targets = tgt_expected.reshape(-1)
 
                 batch_size = src.shape[0]
-                max_len = tgt.shape[1]
+                max_len = 100
                 generated = torch.full((batch_size, 1), tgt_tokenizer.SOS, dtype=torch.long, device=device)
 
                 for _ in range(max_len - 1):
                     out = model(src, generated)
                     next_token = out[:, -1, :].argmax(dim=-1, keepdim=True)
                     generated = torch.cat([generated, next_token], dim=1)
+
+                    if (generated == tgt_tokenizer.EOS).any(dim=1).all():
+                        break
+
                 pred_tokens = generated
             else:
                 predictions = model(src, tgt, teacher_forcing_ratio=0.0)
@@ -73,8 +76,8 @@ def evaluate(model, loader, criterion, device, model_type, tgt_tokenizer):
             total_loss += loss.item() * batch_size
 
             for i in range(batch_size):
-                pred_str = tgt_tokenizer.decode(pred_tokens[i].tolist())
-                ref_str = tgt_tokenizer.decode(tgt[i].tolist())
+                pred_str = tgt_tokenizer.decode(pred_tokens[i])
+                ref_str = tgt_tokenizer.decode(tgt[i])
                 all_preds.append(pred_str)
                 all_refs.append([ref_str])
 
@@ -104,12 +107,12 @@ def train(
 
         if val_metrics["loss"] < best_val_loss:
             best_val_loss = val_metrics["loss"]
-            torch.save(model.state_dict(), f"best_model_{model_type}.pth")
+            torch.save(model.state_dict(), f"artifacts/best_model_{model_type}.pth")
 
     return history
 
 
-def translate_sentence(sentence, model, src_tokenizer, tgt_tokenizer, device, model_type, max_length=50):
+def translate_sentence(sentence, model, src_tokenizer, tgt_tokenizer, device, model_type, max_length=100):
     model.eval()
     tokens = [src_tokenizer.SOS] + src_tokenizer.encode(sentence) + [src_tokenizer.EOS]
     src_tensor = torch.LongTensor(tokens).unsqueeze(0).to(device)
@@ -129,7 +132,5 @@ def translate_sentence(sentence, model, src_tokenizer, tgt_tokenizer, device, mo
             dummy_tgt[0, 0] = tgt_tokenizer.SOS
             output = model(src_tensor, dummy_tgt, teacher_forcing_ratio=0.0)
             tgt_indices = output.argmax(2).squeeze(0).tolist()
-            if tgt_tokenizer.EOS in tgt_indices:
-                tgt_indices = tgt_indices[: tgt_indices.index(tgt_tokenizer.EOS)]
 
     return tgt_tokenizer.decode(tgt_indices)

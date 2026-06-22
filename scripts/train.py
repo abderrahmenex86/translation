@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import random
 import sys
@@ -9,12 +10,13 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, BASE_DIR)
 
-from src.data_utils import TranslationDataset, collate_fn, filter_pairs, read_text_file
+from src.data_utils import PadCollate, TranslationDataset, filter_pairs, read_text_file
 from src.models.factory import get_model
 from src.tokenizer import BasicTokenizer
-from src.trainer import evaluate, train_epoch
+from src.trainer import train
 
 
 def main():
@@ -26,17 +28,21 @@ def main():
     np.random.seed(1337)
     torch.manual_seed(1337)
     torch.cuda.manual_seed_all(1337)
-    torch.backends.cudnn.benchmark = True
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
 
-    n_epochs = 50
+    n_epochs = 15
     batch_size = 256
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    num_workers = min(4, os.cpu_count() or 1)
+
+    os.makedirs(os.path.join(BASE_DIR, "artifacts"), exist_ok=True)
 
     print("[INFO] Loading datasets...")
-    raw_src_train = read_text_file("dataset/tatoeba/train.en")
-    raw_tgt_train = read_text_file("dataset/tatoeba/train.fr")
-    raw_src_val = read_text_file("dataset/tatoeba/val.en")
-    raw_tgt_val = read_text_file("dataset/tatoeba/val.fr")
+    raw_src_train = read_text_file(os.path.join(BASE_DIR, "dataset/tatoeba/train.en"))
+    raw_tgt_train = read_text_file(os.path.join(BASE_DIR, "dataset/tatoeba/train.fr"))
+    raw_src_val = read_text_file(os.path.join(BASE_DIR, "dataset/tatoeba/val.en"))
+    raw_tgt_val = read_text_file(os.path.join(BASE_DIR, "dataset/tatoeba/val.fr"))
 
     raw_src_train, raw_tgt_train = filter_pairs(raw_src_train, raw_tgt_train, max_len=50)
     raw_src_val, raw_tgt_val = filter_pairs(raw_src_val, raw_tgt_val, max_len=50)
@@ -47,31 +53,33 @@ def main():
     src_tokenizer.fit(raw_src_train, max_vocab=15000)
     tgt_tokenizer.fit(raw_tgt_train, max_vocab=15000)
 
-    src_tokenizer.save_vocab("src_vocab.json")
-    tgt_tokenizer.save_vocab("tgt_vocab.json")
+    src_vocab_path = os.path.join(BASE_DIR, "artifacts/src_vocab.json")
+    tgt_vocab_path = os.path.join(BASE_DIR, "artifacts/tgt_vocab.json")
+    src_tokenizer.save_vocab(src_vocab_path)
+    tgt_tokenizer.save_vocab(tgt_vocab_path)
 
     train_dataset = TranslationDataset(raw_src_train, raw_tgt_train, src_tokenizer, tgt_tokenizer)
     val_dataset = TranslationDataset(raw_src_val, raw_tgt_val, src_tokenizer, tgt_tokenizer)
+
+    collate_fn = PadCollate(pad_idx=tgt_tokenizer.PAD)
 
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
         shuffle=True,
         collate_fn=collate_fn,
-        num_workers=min(4, os.cpu_count() or 1),
+        num_workers=num_workers,
         pin_memory=True,
-        persistent_workers=True,
-        prefetch_factor=4,
+        persistent_workers=(num_workers > 0),
     )
     val_loader = DataLoader(
         val_dataset,
         batch_size=batch_size,
         shuffle=False,
         collate_fn=collate_fn,
-        num_workers=min(2, os.cpu_count() or 1),
+        num_workers=num_workers,
         pin_memory=True,
-        persistent_workers=True,
-        prefetch_factor=4,
+        persistent_workers=(num_workers > 0),
     )
 
     models_to_train = ["transformer", "gru", "lstm", "rnn"] if args.model == "all" else [args.model]
@@ -90,9 +98,6 @@ def main():
         optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=3)
 
-        best_val_loss = float("inf")
-        model_save_path = f"best_model_{current_model}.pth"
-
         with mlflow.start_run(run_name=f"{current_model}_tatoeba"):
             mlflow.log_params(
                 {
@@ -108,36 +113,30 @@ def main():
                 }
             )
 
-            mlflow.log_artifact("src_vocab.json", artifact_path="tokenizers")
-            mlflow.log_artifact("tgt_vocab.json", artifact_path="tokenizers")
+            mlflow.log_artifact(src_vocab_path, artifact_path="tokenizers")
+            mlflow.log_artifact(tgt_vocab_path, artifact_path="tokenizers")
 
-            for epoch in range(1, n_epochs + 1):
-                train_metrics = train_epoch(model, train_loader, criterion, optimizer, device, current_model)
-                val_metrics = evaluate(model, val_loader, criterion, device, current_model, tgt_tokenizer)
-                scheduler.step(val_metrics["loss"])
+            history = train(
+                model,
+                train_loader,
+                val_loader,
+                criterion,
+                optimizer,
+                scheduler,
+                device,
+                n_epochs,
+                current_model,
+                tgt_tokenizer,
+            )
 
-                current_lr = optimizer.param_groups[0]["lr"]
+            history_path = os.path.join(BASE_DIR, f"artifacts/{current_model}_history.json")
+            with open(history_path, "w") as f:
+                json.dump(history, f)
+            mlflow.log_artifact(history_path, artifact_path="metrics")
 
-                print(
-                    f"Epoch {epoch:02d}/{n_epochs} | LR: {current_lr:.6f} | Train Loss: {train_metrics['loss']:.4f} | Val Loss: {val_metrics['loss']:.4f} | BLEU: {val_metrics['bleu']:.2f}"
-                )
-
-                mlflow.log_metrics(
-                    {
-                        "learning_rate": current_lr,
-                        "train_loss": train_metrics["loss"],
-                        "train_perplexity": train_metrics["perplexity"],
-                        "val_loss": val_metrics["loss"],
-                        "val_perplexity": val_metrics["perplexity"],
-                        "val_bleu": val_metrics["bleu"],
-                    },
-                    step=epoch,
-                )
-
-                if val_metrics["loss"] < best_val_loss:
-                    best_val_loss = val_metrics["loss"]
-                    torch.save(model.state_dict(), model_save_path)
-                    mlflow.log_artifact(model_save_path, artifact_path="weights")
+            model_save_path = os.path.join(BASE_DIR, f"artifacts/best_model_{current_model}.pth")
+            if os.path.exists(model_save_path):
+                mlflow.log_artifact(model_save_path, artifact_path="weights")
 
         print(f"[INFO] Finished {current_model.upper()}.")
 

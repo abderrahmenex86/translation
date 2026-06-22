@@ -41,9 +41,13 @@ class BasicTokenizer:
         return [self.word2idx.get(w, self.UNK) for w in words]
 
     def decode(self, indices):
-        return " ".join(
-            [self.idx2word.get(idx, "<UNK>") for idx in indices if idx not in (self.PAD, self.SOS, self.EOS)]
-        )
+        if hasattr(indices, "tolist"):
+            indices = indices.tolist()
+
+        if self.EOS in indices:
+            indices = indices[: indices.index(self.EOS)]
+
+        return " ".join([self.idx2word.get(idx, "<UNK>") for idx in indices if idx not in (self.PAD, self.SOS)])
 
     def __len__(self):
         return len(self.word2idx)

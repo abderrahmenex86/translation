@@ -34,8 +34,12 @@ class TranslationDataset(Dataset):
         return self.src_tensors[idx], self.tgt_tensors[idx]
 
 
-def collate_fn(batch):
-    src_batch, tgt_batch = zip(*batch)
-    src_padded = pad_sequence(src_batch, padding_value=0, batch_first=True)
-    tgt_padded = pad_sequence(tgt_batch, padding_value=0, batch_first=True)
-    return src_padded, tgt_padded
+class PadCollate:
+    def __init__(self, pad_idx):
+        self.pad_idx = pad_idx
+
+    def __call__(self, batch):
+        src_batch, tgt_batch = zip(*batch)
+        src_padded = pad_sequence(src_batch, padding_value=self.pad_idx, batch_first=True)
+        tgt_padded = pad_sequence(tgt_batch, padding_value=self.pad_idx, batch_first=True)
+        return src_padded, tgt_padded
