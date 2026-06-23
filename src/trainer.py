@@ -98,26 +98,41 @@ def run_training(args, train_loader, val_loader, src_tok, tgt_tok, device, run_d
     criterion = nn.CrossEntropyLoss(ignore_index=tgt_tok.PAD, label_smoothing=0.1)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
 
-    with open(os.path.join(run_dir, "hyperparameters.json"), "w") as f:
-        json.dump(vars(args), f, indent=4)
-
-    if summary is not None:
-        try:
-            dummy_src = torch.randint(0, len(src_tok), (2, 50)).to(device)
-            dummy_tgt = torch.randint(0, len(tgt_tok), (2, 50)).to(device)
-            arch_str = repr(summary(model, input_data=(dummy_src, dummy_tgt), verbose=0))
-            with open(os.path.join(run_dir, "architecture.txt"), "w") as f:
-                f.write(arch_str)
-        except Exception as e:
-            tqdm.write(f"[WARNING] Could not generate architecture.txt: {e}")
-
+    checkpoint_path = os.path.join(run_dir, "checkpoint.pth")
     history = {"train": {"loss": [], "perplexity": []}, "val": {"loss": [], "perplexity": [], "bleu": []}}
     best_loss = float("inf")
+    start_epoch = 1
+    early_stop_counter = 0
+
+    # Load from checkpoint if --resume flag is called [2]
+    if args.resume and os.path.exists(checkpoint_path):
+        tqdm.write(f"[INFO] Found checkpoint. Resuming training on {device}...")
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+        model.load_state_dict(checkpoint["model_state_dict"])
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        start_epoch = checkpoint["epoch"] + 1
+        best_loss = checkpoint["best_loss"]
+        history = checkpoint["history"]
+        early_stop_counter = checkpoint["early_stop_counter"]
+        tqdm.write(f"[INFO] Resumed successfully. Starting from Epoch {start_epoch} (Prior Best Loss: {best_loss:.4f})")
+    else:
+        with open(os.path.join(run_dir, "hyperparameters.json"), "w") as f:
+            json.dump(vars(args), f, indent=4)
+
+        if summary is not None:
+            try:
+                dummy_src = torch.randint(0, len(src_tok), (2, 50)).to(device)
+                dummy_tgt = torch.randint(0, len(tgt_tok), (2, 50)).to(device)
+                arch_str = repr(summary(model, input_data=(dummy_src, dummy_tgt), verbose=0))
+                with open(os.path.join(run_dir, "architecture.txt"), "w") as f:
+                    f.write(arch_str)
+            except Exception as e:
+                tqdm.write(f"[WARNING] Could not generate architecture.txt: {e}")
 
     tqdm.write(f"\n[INFO] Run Directory: {run_dir}")
-    tqdm.write(f"[INFO] Training {args.model.upper()} | LR: {lr} | Epochs: {args.epochs}\n")
+    tqdm.write(f"[INFO] Training {args.model.upper()} | LR: {lr} | Epochs: {args.epochs} | Patience: {args.patience}\n")
 
-    epoch_bar = tqdm(range(1, args.epochs + 1), desc="Epoch Progress", unit="epoch")
+    epoch_bar = tqdm(range(start_epoch, args.epochs + 1), desc="Epoch Progress", unit="epoch")
     for epoch in epoch_bar:
         t_loss = train_epoch(model, train_loader, criterion, optimizer, device, args.model, epoch_num=epoch)
         v_loss, v_bleu = evaluate(model, val_loader, criterion, device, args.model, tgt_tok, epoch_num=epoch)
@@ -132,11 +147,31 @@ def run_training(args, train_loader, val_loader, src_tok, tgt_tok, device, run_d
             f"Epoch {epoch:02d}/{args.epochs} | Train Loss: {t_loss:.4f} | Val Loss: {v_loss:.4f} | BLEU: {v_bleu:.2f}"
         )
 
+        is_best = v_loss < best_loss
+        if is_best:
+            best_loss = v_loss
+            early_stop_counter = 0
+            torch.save(model.state_dict(), os.path.join(run_dir, f"best_{args.model}.pth"))
+        else:
+            early_stop_counter += 1
+
+        checkpoint_state = {
+            "epoch": epoch,
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "best_loss": best_loss,
+            "history": history,
+            "early_stop_counter": early_stop_counter,
+        }
+        torch.save(checkpoint_state, checkpoint_path)
+
         epoch_bar.set_postfix({"Train Loss": f"{t_loss:.4f}", "Val Loss": f"{v_loss:.4f}", "BLEU": f"{v_bleu:.2f}%"})
 
-        if v_loss < best_loss:
-            best_loss = v_loss
-            torch.save(model.state_dict(), os.path.join(run_dir, f"best_{args.model}.pth"))
+        if early_stop_counter >= args.patience:
+            tqdm.write(
+                f"\n[INFO] Early Stopping triggered at Epoch {epoch:02d}. No improvement for {args.patience} epochs."
+            )
+            break
 
     with open(os.path.join(run_dir, f"{args.model}_history.json"), "w") as f:
         json.dump(history, f, indent=4)

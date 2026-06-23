@@ -1,8 +1,11 @@
 import argparse
 import datetime
 import os
+import warnings
 
 import torch
+
+warnings.filterwarnings("ignore", message="The PyTorch API of nested tensors is in prototype stage.*")
 
 from src.dataset import build_dataloaders, load_data_lines
 from src.infer import run_inference
@@ -13,7 +16,6 @@ from src.trainer import run_training
 
 
 def get_run_dir(args, is_training=False):
-    """Generates a timestamped directory or finds the latest one for inference."""
     if not is_training and args.run_dir:
         return args.run_dir
 
@@ -48,7 +50,9 @@ def main():
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch_size", type=int, default=256)
 
-    parser.add_argument("--run_dir", type=str, default=None, help="Specific artifacts subfolder to load")
+    parser.add_argument("--patience", type=int, default=5, help="Early stopping patience (epochs)")
+    parser.add_argument("--resume", action="store_true", help="Resume training from previous checkpoint")
+    parser.add_argument("--run_dir", type=str, default=None, help="Specific artifacts subfolder to load/resume")
 
     parser.add_argument("--embed_size", type=int, default=256)
     parser.add_argument("--hidden_size", type=int, default=512)
@@ -70,7 +74,20 @@ def main():
         raise NotImplementedError("Other tokenizers are not yet integrated.")
 
     is_training = args.mode in ["train", "optimize"]
-    run_dir = get_run_dir(args, is_training)
+    if args.resume:
+        if not args.run_dir:
+            dirs = [
+                os.path.join("artifacts", d)
+                for d in os.listdir("artifacts")
+                if os.path.isdir(os.path.join("artifacts", d))
+            ]
+            if not dirs:
+                raise ValueError("No prior runs found to resume from.")
+            run_dir = max(dirs, key=os.path.getmtime)
+        else:
+            run_dir = args.run_dir
+    else:
+        run_dir = get_run_dir(args, is_training)
 
     if args.mode == "infer":
         run_inference(args, src_tok, tgt_tok, device, run_dir)
@@ -87,12 +104,20 @@ def main():
         val_src, val_tgt = val_src[:50], val_tgt[:50]
         args.batch_size = min(args.batch_size, 32)
 
-    src_tok.fit(train_src, max_vocab=15000)
-    tgt_tok.fit(train_tgt, max_vocab=15000)
-
-    if is_training:
-        src_tok.save_vocab(os.path.join(run_dir, f"src_vocab_{args.tokenizer}.json"))
-        tgt_tok.save_vocab(os.path.join(run_dir, f"tgt_vocab_{args.tokenizer}.json"))
+    if args.resume:
+        print(f"[INFO] Resuming training. Re-loading vocab from {run_dir}...")
+        try:
+            src_tok.load_vocab(os.path.join(run_dir, f"src_vocab_{args.tokenizer}.json"))
+            tgt_tok.load_vocab(os.path.join(run_dir, f"tgt_vocab_{args.tokenizer}.json"))
+        except FileNotFoundError:
+            print(f"[ERROR] Cannot resume. Vocabulary files are missing in {run_dir}")
+            return
+    else:
+        src_tok.fit(train_src, max_vocab=15000)
+        tgt_tok.fit(train_tgt, max_vocab=15000)
+        if is_training:
+            src_tok.save_vocab(os.path.join(run_dir, f"src_vocab_{args.tokenizer}.json"))
+            tgt_tok.save_vocab(os.path.join(run_dir, f"tgt_vocab_{args.tokenizer}.json"))
 
     train_loader, val_loader = build_dataloaders(args, (train_src, train_tgt), (val_src, val_tgt), src_tok, tgt_tok)
 
