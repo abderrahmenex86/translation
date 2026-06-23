@@ -11,6 +11,7 @@ def main():
     parser.add_argument("--mode", type=str, required=True, choices=["download", "verify", "plot"])
     parser.add_argument("--model", type=str, default="all", choices=["all", "rnn", "lstm", "gru", "transformer"])
     parser.add_argument("--dataset", type=str, default="dataset/tatoeba")
+    parser.add_argument("--tokenizer", type=str, default="basic", choices=["basic", "bpe"])
     parser.add_argument("--run_dir", type=str, default=None, help="Target run folder for plotting")
     args = parser.parse_args()
 
@@ -21,11 +22,9 @@ def main():
 
     elif args.mode == "verify":
         args.batch_size = 4
-        args.tokenizer = "basic"
         run_verification(args)
 
     elif args.mode == "plot":
-        # Resolve the target directory
         if not args.run_dir:
             dirs = [
                 os.path.join("artifacts", d)

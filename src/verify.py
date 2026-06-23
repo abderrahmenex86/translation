@@ -1,14 +1,23 @@
+import os
+
 from src.dataset import build_dataloaders, load_data_lines
-from src.tokenizer import BasicTokenizer
+from src.tokenizer import BasicTokenizer, BPETokenizer
 
 
 def run_verification(args):
-    print(f"\n[INFO] Verifying Dataloader and Target Slicing for {args.dataset}...")
+    print(f"\n[INFO] Verifying Dataloader and Target Slicing using {args.tokenizer.upper()}...")
 
     (train_src, train_tgt), _ = load_data_lines(args.dataset, max_len=50)
     train_src, train_tgt = train_src[:1000], train_tgt[:1000]
 
-    src_tok, tgt_tok = BasicTokenizer(min_freq=2), BasicTokenizer(min_freq=2)
+    # Dynamically select the target tokenizer
+    if args.tokenizer == "basic":
+        src_tok, tgt_tok = BasicTokenizer(min_freq=2), BasicTokenizer(min_freq=2)
+    elif args.tokenizer == "bpe":
+        src_tok, tgt_tok = BPETokenizer(vocab_size=8000), BPETokenizer(vocab_size=8000)
+    else:
+        raise NotImplementedError(f"Tokenizer {args.tokenizer} is not yet supported.")
+
     src_tok.fit(train_src)
     tgt_tok.fit(train_tgt)
 

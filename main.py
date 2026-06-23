@@ -11,7 +11,7 @@ from src.dataset import build_dataloaders, load_data_lines
 from src.infer import run_inference
 from src.optimize import run_optimization
 from src.tester import run_test
-from src.tokenizer import BasicTokenizer
+from src.tokenizer import BasicTokenizer, BPETokenizer
 from src.trainer import run_training
 
 
@@ -46,7 +46,7 @@ def main():
     parser.add_argument("--mode", type=str, required=True, choices=["test", "train", "optimize", "infer"])
     parser.add_argument("--model", type=str, required=True, choices=["rnn", "lstm", "gru", "transformer"])
     parser.add_argument("--dataset", type=str, default="dataset/tatoeba")
-    parser.add_argument("--tokenizer", type=str, default="basic", choices=["basic"])
+    parser.add_argument("--tokenizer", type=str, default="basic", choices=["basic", "bpe"])
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch_size", type=int, default=256)
 
@@ -70,6 +70,8 @@ def main():
 
     if args.tokenizer == "basic":
         src_tok, tgt_tok = BasicTokenizer(), BasicTokenizer()
+    elif args.tokenizer == "bpe":
+        src_tok, tgt_tok = BPETokenizer(vocab_size=8000), BPETokenizer(vocab_size=8000)
     else:
         raise NotImplementedError("Other tokenizers are not yet integrated.")
 
