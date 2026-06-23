@@ -4,22 +4,19 @@ import os
 
 import torch
 import torch.nn as nn
+from torchinfo import summary
 from torchmetrics.text import BLEUScore
 from tqdm import tqdm
 
 from src.factory import build_model
 
-try:
-    from torchinfo import summary
-except ImportError:
-    summary = None
 
-
-def train_epoch(model, loader, criterion, optimizer, device, model_type):
+def train_epoch(model, loader, criterion, optimizer, device, model_type, epoch_num=None):
     model.train()
     total_loss, total_samples = 0.0, 0
 
-    pbar = tqdm(loader, desc="Training", leave=False)
+    desc = f"Epoch {epoch_num} - Training" if epoch_num else "Training"
+    pbar = tqdm(loader, desc=desc, leave=False)
     for src, tgt in pbar:
         src, tgt = src.to(device, non_blocking=True), tgt.to(device, non_blocking=True)
         optimizer.zero_grad()
@@ -44,19 +41,20 @@ def train_epoch(model, loader, criterion, optimizer, device, model_type):
         total_samples += batch_size
         total_loss += loss.item() * batch_size
 
-        pbar.set_postfix({"Loss": f"{loss.item():.4f}"})
+        pbar.set_postfix({"Batch Loss": f"{loss.item():.4f}"})
 
     return total_loss / total_samples
 
 
 @torch.no_grad()
-def evaluate(model, loader, criterion, device, model_type, tgt_tok):
+def evaluate(model, loader, criterion, device, model_type, tgt_tok, epoch_num=None):
     model.eval()
     total_loss, total_samples = 0.0, 0
     bleu_scorer = BLEUScore().to(device)
     all_preds, all_refs = [], []
 
-    pbar = tqdm(loader, desc="Evaluating", leave=False)
+    desc = f"Epoch {epoch_num} - Evaluating" if epoch_num else "Evaluating"
+    pbar = tqdm(loader, desc=desc, leave=False)
     for src, tgt in pbar:
         src, tgt = src.to(device, non_blocking=True), tgt.to(device, non_blocking=True)
         batch_size = src.size(0)
@@ -119,9 +117,10 @@ def run_training(args, train_loader, val_loader, src_tok, tgt_tok, device, run_d
     tqdm.write(f"\n[INFO] Run Directory: {run_dir}")
     tqdm.write(f"[INFO] Training {args.model.upper()} | LR: {lr} | Epochs: {args.epochs}\n")
 
-    for epoch in range(1, args.epochs + 1):
-        t_loss = train_epoch(model, train_loader, criterion, optimizer, device, args.model)
-        v_loss, v_bleu = evaluate(model, val_loader, criterion, device, args.model, tgt_tok)
+    epoch_bar = tqdm(range(1, args.epochs + 1), desc="Epoch Progress", unit="epoch")
+    for epoch in epoch_bar:
+        t_loss = train_epoch(model, train_loader, criterion, optimizer, device, args.model, epoch_num=epoch)
+        v_loss, v_bleu = evaluate(model, val_loader, criterion, device, args.model, tgt_tok, epoch_num=epoch)
 
         history["train"]["loss"].append(t_loss)
         history["train"]["perplexity"].append(math.exp(t_loss))
@@ -132,6 +131,8 @@ def run_training(args, train_loader, val_loader, src_tok, tgt_tok, device, run_d
         tqdm.write(
             f"Epoch {epoch:02d}/{args.epochs} | Train Loss: {t_loss:.4f} | Val Loss: {v_loss:.4f} | BLEU: {v_bleu:.2f}"
         )
+
+        epoch_bar.set_postfix({"Train Loss": f"{t_loss:.4f}", "Val Loss": f"{v_loss:.4f}", "BLEU": f"{v_bleu:.2f}%"})
 
         if v_loss < best_loss:
             best_loss = v_loss
