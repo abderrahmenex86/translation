@@ -15,8 +15,8 @@ This project is an end-to-end Neural Machine Translation (NMT) system built from
   <img src="docs/figs/architectures_comparison.png" width="30%" />
   <img src="docs/figs/tokenizers_comparison.png" width="60%" />
   <br>
-  <img src="docs/figs/optuna_history.png" width="30%" />
-  <img src="docs/figs/optuna_params.png" width="60%" />
+  <img src="docs/figs/optuna_history.png" width="35%" />
+  <img src="docs/figs/optuna_params.png" width="55%" />
 </div>
 
 ## Features
