@@ -1,21 +1,43 @@
+import json
 import os
 
 import torch
 
 from src.factory import build_model
+from src.tokenizer import BasicTokenizer, BPETokenizer, SPMTokenizer
 
 
 @torch.no_grad()
-def run_inference(args, src_tok, tgt_tok, device, run_dir):
+def run_inference(args, _dummy_src_tok, _dummy_tgt_tok, device, run_dir):
+    hp_path = os.path.join(run_dir, "hyperparameters.json")
+    if not os.path.exists(hp_path):
+        print(f"[ERROR] {hp_path} missing. Cannot infer automatically.")
+        return
+
+    with open(hp_path, "r") as f:
+        hp = json.load(f)
+
+    tokenizer_type = hp.get("tokenizer", "basic")
+    vocab_size = hp.get("vocab_size", 8000)
+    model_type = hp.get("model", args.model)
+
+    # 2. Reconstruct the correct tokenizers
+    if tokenizer_type == "basic":
+        src_tok, tgt_tok = BasicTokenizer(), BasicTokenizer()
+    elif tokenizer_type == "bpe":
+        src_tok, tgt_tok = BPETokenizer(vocab_size=vocab_size), BPETokenizer(vocab_size=vocab_size)
+    elif tokenizer_type == "spm":
+        src_tok, tgt_tok = SPMTokenizer(vocab_size=vocab_size), SPMTokenizer(vocab_size=vocab_size)
+
     try:
-        src_tok.load_vocab(os.path.join(run_dir, f"src_vocab_{args.tokenizer}.json"))
-        tgt_tok.load_vocab(os.path.join(run_dir, f"tgt_vocab_{args.tokenizer}.json"))
+        src_tok.load_vocab(os.path.join(run_dir, f"src_vocab_{tokenizer_type}.json"))
+        tgt_tok.load_vocab(os.path.join(run_dir, f"tgt_vocab_{tokenizer_type}.json"))
     except FileNotFoundError:
         print(f"[ERROR] Vocab files missing in {run_dir}. Please run training first.")
         return
 
-    model = build_model(args.model, len(src_tok), len(tgt_tok), tgt_tok.PAD, device, **vars(args))
-    weights_path = os.path.join(run_dir, f"best_{args.model}.pth")
+    model = build_model(model_type, len(src_tok), len(tgt_tok), tgt_tok.PAD, device, **hp)
+    weights_path = os.path.join(run_dir, f"best_{model_type}.pth")
 
     if not os.path.exists(weights_path):
         print(f"[ERROR] Weights not found at {weights_path}")
@@ -25,7 +47,8 @@ def run_inference(args, src_tok, tgt_tok, device, run_dir):
     model.eval()
 
     print(f"\n[INFO] Loaded Run: {run_dir}")
-    print(f"[INFO] Interactive Mode ({args.model.upper()}) | Type 'q' to quit.")
+    print(f"[INFO] Settings: Model={model_type.upper()} | Tokenizer={tokenizer_type.upper()} | Vocab={vocab_size}")
+    print(f"[INFO] Interactive Mode | Type 'q' to quit.")
     print("=" * 60)
 
     while True:
@@ -40,7 +63,7 @@ def run_inference(args, src_tok, tgt_tok, device, run_dir):
         generated = torch.tensor([[tgt_tok.SOS]], dtype=torch.long, device=device)
 
         for _ in range(50):
-            if args.model == "transformer":
+            if model_type == "transformer":
                 out = model(src_tensor, generated)
             else:
                 dummy_tgt = torch.zeros(1, 50, dtype=torch.long, device=device)
